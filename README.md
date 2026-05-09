@@ -29,7 +29,7 @@ A tiny native macOS menu bar app that lists every TCP port being listened on loc
 Requires macOS 13+, Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-git clone https://github.com/<you>/porto.git
+git clone https://github.com/hameddavodi/porto.git
 cd porto
 ./build.sh
 open build/Porto.app
