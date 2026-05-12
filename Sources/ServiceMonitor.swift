@@ -11,17 +11,54 @@ final class ServiceMonitor: ObservableObject {
     private var timer: Timer?
     private let refreshInterval: TimeInterval = 3.0
     private var firstSeen: [String: Date] = [:]
+    private var refreshStartedAt: Date?
+    // If a refresh's background scan was in flight when the Mac slept, its
+    // completion block may never run — isRefreshing would stay true forever
+    // and every subsequent tick would bail out, leaving the menu empty.
+    private let refreshStaleAfter: TimeInterval = 15.0
 
     init() {
         refresh()
+        startTimer()
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(self, selector: #selector(handleWake),
+                       name: NSWorkspace.didWakeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(handleWake),
+                       name: NSWorkspace.screensDidWakeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(handleWake),
+                       name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+    }
+
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
 
+    @objc private func handleWake() {
+        Task { @MainActor in
+            // Drop any stuck in-flight state and resync timer/scan immediately.
+            self.isRefreshing = false
+            self.refreshStartedAt = nil
+            self.startTimer()
+            self.refresh()
+        }
+    }
+
     func refresh() {
-        if isRefreshing { return }
+        if isRefreshing {
+            if let started = refreshStartedAt, Date().timeIntervalSince(started) < refreshStaleAfter {
+                return
+            }
+            // Previous refresh is stale (likely killed by system sleep) — recover.
+        }
         isRefreshing = true
+        refreshStartedAt = Date()
         Task.detached(priority: .background) {
             let procs = PortScanner.scan()
             let docks = DockerScanner.scan()
@@ -44,6 +81,7 @@ final class ServiceMonitor: ObservableObject {
                 self.services = sorted
                 self.lastRefresh = now
                 self.isRefreshing = false
+                self.refreshStartedAt = nil
             }
         }
     }
